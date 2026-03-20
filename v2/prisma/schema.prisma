@@ -1,0 +1,472 @@
+// KioskoIA - Sistema Inteligente de Gestión de Tiendas Escolares
+// Schema de Base de Datos - Versión 2.0.0
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USUARIOS Y AUTENTICACIÓN
+// ============================================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(TENDERO)
+  phone     String?
+  avatar    String?
+  isActive  Boolean  @default(true)
+  lastLogin DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sales          Sale[]
+  activities     Activity[]
+  inventoryLogs  InventoryLog[]
+  cashRegisters  CashRegister[]
+
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  TENDERO
+  PADRE
+}
+
+// ============================================
+// PRODUCTOS E INVENTARIO
+// ============================================
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  color       String    @default("#059669")
+  icon        String?
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  sku         String?  @unique
+  barcode     String?
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
+
+  // Precios
+  costPrice Float @default(0)
+  salePrice Float
+
+  // Inventario
+  stock    Int @default(0)
+  minStock Int @default(10)
+  maxStock Int @default(100)
+
+  // Clasificación
+  isHealthy   Boolean @default(false)
+  isAvailable Boolean @default(true)
+
+  // Imagen
+  image String?
+
+  // Auditoría
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  saleItems     SaleItem[]
+  inventoryLogs InventoryLog[]
+  purchaseItems PurchaseItem[]
+
+  @@index([categoryId])
+  @@index([name])
+  @@map("products")
+}
+
+model InventoryLog {
+  id            String     @id @default(cuid())
+  productId     String
+  product       Product    @relation(fields: [productId], references: [id])
+  changeType    ChangeType
+  quantity      Int
+  reason        String?
+  previousStock Int
+  newStock      Int
+  userId        String?
+  user          User?      @relation(fields: [userId], references: [id])
+  createdAt     DateTime   @default(now())
+
+  @@index([productId])
+  @@index([createdAt])
+  @@map("inventory_logs")
+}
+
+enum ChangeType {
+  VENTA
+  AJUSTE
+  COMPRA
+  DEVOLUCION
+  PERDIDA
+}
+
+// ============================================
+// VENTAS
+// ============================================
+
+model Sale {
+  id            String        @id @default(cuid())
+  invoiceNumber String        @unique
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  total         Float
+  subtotal      Float
+  discount      Float         @default(0)
+  tax           Float         @default(0)
+  paymentMethod PaymentMethod
+  paymentStatus PaymentStatus @default(COMPLETADA)
+  customerId    String?
+  customer      Customer?     @relation(fields: [customerId], references: [id])
+  customerName  String?
+  notes         String?
+
+  // Crédito/Fiado
+  isCredit      Boolean       @default(false)
+  creditDueDate DateTime?
+
+  // Offline sync
+  isSynced  Boolean  @default(true)
+  syncedAt  DateTime?
+  deviceId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items         SaleItem[]
+  creditPayments CreditPayment[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([paymentMethod])
+  @@index([customerId])
+  @@map("sales")
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  saleId    String
+  sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  unitPrice Float
+  subtotal  Float
+  discount  Float   @default(0)
+  costPrice Float   @default(0) // Precio de costo al momento de la venta
+
+  createdAt DateTime @default(now())
+
+  @@index([saleId])
+  @@index([productId])
+  @@map("sale_items")
+}
+
+enum PaymentMethod {
+  EFECTIVO
+  NEQUI
+  DAVIPLATA
+  TRANSFERENCIA
+  SALDO_PREPAGO
+  TARJETA
+  CREDITO
+  OTRO
+}
+
+enum PaymentStatus {
+  PENDIENTE
+  COMPLETADA
+  CANCELADA
+  DEVUELTA
+  FIADO
+}
+
+// ============================================
+// CLIENTES Y SISTEMA DE FIADO
+// ============================================
+
+model Customer {
+  id          String   @id @default(cuid())
+  name        String
+  email       String?
+  phone       String?
+  address     String?
+  notes       String?
+  creditLimit Float    @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sales          Sale[]
+  creditPayments CreditPayment[]
+
+  @@index([name])
+  @@index([phone])
+  @@map("customers")
+}
+
+model CreditPayment {
+  id          String   @id @default(cuid())
+  saleId      String
+  sale        Sale     @relation(fields: [saleId], references: [id])
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id])
+  amount      Float
+  paymentMethod PaymentMethod @default(EFECTIVO)
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@index([saleId])
+  @@index([customerId])
+  @@index([createdAt])
+  @@map("credit_payments")
+}
+
+// ============================================
+// CIERRE DE CAJA
+// ============================================
+
+model CashRegister {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id])
+  openingDate     DateTime      @default(now())
+  closingDate     DateTime?
+  
+  // Montos de apertura
+  initialCash     Float         @default(0)
+  
+  // Montos de cierre
+  cashSales       Float         @default(0)
+  cardSales       Float         @default(0)
+  nequiSales      Float         @default(0)
+  daviplataSales  Float         @default(0)
+  transferSales   Float         @default(0)
+  otherSales      Float         @default(0)
+  totalSales      Float         @default(0)
+  
+  // Sistema de pagos
+  totalInPayments Float         @default(0)  // Pagos de fiados recibidos
+  totalOutPayments Float        @default(0)  // Pagos a proveedores
+  
+  // Cierre
+  expectedCash    Float         @default(0)  // Lo que debería haber
+  actualCash      Float?        // Lo que realmente hay
+  difference      Float?        // Diferencia
+  notes           String?
+  
+  status          RegisterStatus @default(ABIERTA)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([openingDate])
+  @@index([status])
+  @@map("cash_registers")
+}
+
+enum RegisterStatus {
+  ABIERTA
+  CERRADA
+  CUADRADA
+  DESCUADRADA
+}
+
+// ============================================
+// PROVEEDORES Y COMPRAS
+// ============================================
+
+model Supplier {
+  id            String         @id @default(cuid())
+  name          String
+  contactName   String?
+  phone         String?
+  email         String?
+  address       String?
+  taxId         String?        // NIT/RUT
+  paymentTerms  Int            @default(0) // Días de crédito
+  notes         String?
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+  supplierDebts  SupplierDebt[]
+
+  @@index([name])
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id           String       @id @default(cuid())
+  orderNumber  String       @unique
+  supplierId   String
+  supplier     Supplier     @relation(fields: [supplierId], references: [id])
+  status       OrderStatus  @default(PENDIENTE)
+  
+  // Totales
+  subtotal     Float        @default(0)
+  tax          Float        @default(0)
+  total        Float        @default(0)
+  
+  // Fechas
+  orderDate    DateTime     @default(now())
+  expectedDate DateTime?
+  receivedDate DateTime?
+  dueDate      DateTime?    // Fecha de vencimiento del pago
+  
+  // Estado de pago
+  paymentStatus PaymentStatus @default(PENDIENTE)
+  paidAmount   Float        @default(0)
+  pendingAmount Float       @default(0)
+  
+  notes        String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  items         PurchaseItem[]
+  supplierDebts SupplierDebt[]
+
+  @@index([supplierId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@map("purchase_orders")
+}
+
+model PurchaseItem {
+  id           String        @id @default(cuid())
+  orderId      String
+  order        PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product       @relation(fields: [productId], references: [id])
+  quantity     Int
+  unitCost     Float
+  subtotal     Float
+  receivedQty  Int           @default(0)
+  createdAt    DateTime      @default(now())
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("purchase_items")
+}
+
+model SupplierDebt {
+  id           String       @id @default(cuid())
+  supplierId   String
+  supplier     Supplier     @relation(fields: [supplierId], references: [id])
+  purchaseOrderId String?
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  
+  amount       Float                     // Monto original
+  paidAmount   Float          @default(0) // Monto pagado
+  pendingAmount Float                      // Monto pendiente
+  
+  dueDate      DateTime?                  // Fecha de vencimiento
+  status       DebtStatus     @default(PENDIENTE)
+  
+  notes        String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([supplierId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("supplier_debts")
+}
+
+enum OrderStatus {
+  PENDIENTE
+  ENVIADO
+  RECIBIDO_PARCIAL
+  RECIBIDO_COMPLETO
+  CANCELADO
+}
+
+enum DebtStatus {
+  PENDIENTE
+  PARCIAL
+  PAGADO
+  VENCIDO
+}
+
+// ============================================
+// ACTIVIDAD Y AUDITORÍA
+// ============================================
+
+model Activity {
+  id          String  @id @default(cuid())
+  userId      String
+  user        User    @relation(fields: [userId], references: [id])
+  action      String
+  entityType  String
+  entityId    String?
+  description String?
+  metadata    String? // JSON string
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("activities")
+}
+
+// ============================================
+// SINCRONIZACIÓN
+// ============================================
+
+model SyncQueue {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  action     String // CREATE, UPDATE, DELETE
+  data       String // JSON string
+  deviceId   String?
+  isSynced   Boolean  @default(false)
+  syncedAt   DateTime?
+  attempts   Int      @default(0)
+  error      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([isSynced])
+  @@index([entityType, entityId])
+  @@map("sync_queue")
+}
+
+// ============================================
+// CONFIGURACIÓN
+// ============================================
+
+model Setting {
+  id          String  @id @default(cuid())
+  key         String  @unique
+  value       String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("settings")
+}
